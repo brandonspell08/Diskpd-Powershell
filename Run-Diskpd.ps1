@@ -31,23 +31,35 @@
     Param
     (
         # Performs a disk I/O Test on all drives on the server
-        [Parameter(Position=0,ParameterSetName='-AllDrives')]
-        [switch]$AllDrives,
+        [Parameter( 
+            Position=0,
+            ParameterSetName='-AllDrives' 
+            )]
+        [switch]
+        $AllDrives,
 
         # Performs Read-Only, Write-Only, Or a mix of read/write(75/25) tests. Selecting all will perform all 3 tests. Note that you can combine tests. ex: -Testtype Read,Write
-        [ValidateSet('Read','Write','Standard','All')]
-        [string[]]$TestType = 'both',
+        [ValidateSet(
+            'Read',
+            'Write',
+            'Standard',
+            'All'
+            )]
+        [string[]]
+        $TestType = 'All',
 
         # Outputs the results to the root directory of the script as a text file.
-        [switch]$OutFile = $false,
+        [switch]
+        $OutFile = $false,
 
         # Time (in seconds) to run the test. default is 30 seconds. Note: there is a Warm-up and Cooldown period added to the test time.
-        [int]$Seconds = 30
+        [int]
+        $Seconds = 30
     )
 
         DynamicParam
         {
-            if(!$AllDrives)
+            if ( !$AllDrives )
             {
                 # Set the dynamic parameters' name
                 $ParameterName = 'Drive'
@@ -67,20 +79,23 @@
                 $ParameterAttribute.DontShow = $false
 
                 # Add the attributes to the attributes collection
-                $AttributeCollection.Add($ParameterAttribute)
+                $AttributeCollection.Add( $ParameterAttribute )
 
                 # Generate and set the ValidateSet 
-                $drives = Get-WmiObject -Class win32_logicaldisk -Filter "DriveType='3'" | Select-Object -ExpandProperty DeviceID | ForEach-Object {$drive = -join ( $_,"\");if(Test-Path -Path $drive){$drive}}
+                $drives = Get-WmiObject -Class win32_logicaldisk -Filter "DriveType='3'" | Select-Object -ExpandProperty DeviceID | ForEach-Object { 
+                    $drive = -join ( $_,"\")
+                    if ( Test-Path -Path $drive ){ $drive }
+                }
 
                 # Add the ValidateSet to the attributes collection
                 $ValidateSetAttribute = New-Object System.Management.Automation.ValidateSetAttribute($drives)
 
                 # Add the ValidateSet to the attributes collection
-                $AttributeCollection.Add($ValidateSetAttribute)
+                $AttributeCollection.Add( $ValidateSetAttribute )
 
                 # Create and return the dynamic parameter
-                $RuntimeParameter = New-Object System.Management.Automation.RuntimeDefinedParameter($ParameterName, [string[]], $AttributeCollection)
-                $RuntimeParameterDictionary.Add($ParameterName, $RuntimeParameter)
+                $RuntimeParameter = New-Object System.Management.Automation.RuntimeDefinedParameter( $ParameterName, [string[]], $AttributeCollection )
+                $RuntimeParameterDictionary.Add( $ParameterName, $RuntimeParameter )
                 return $RuntimeParameterDictionary
             }
         }
@@ -89,29 +104,33 @@
     Begin
     {
         #Priviledge Check
-        $user = [Security.Principal.WindowsIdentity]::GetCurrent();
-        if((New-Object Security.Principal.WindowsPrincipal $user).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator) -eq $False) {
-	        throw ("Administrators privilege is required!")
-	          
+        $user =  New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
+        $adminrole = [Security.Principal.WindowsBuiltinRole]::Administrator
+        if ( -not ( $user.IsInRole( $adminrole ) ) ) {
+	        throw ( "Administrators privilege is required!" )
         }
         $path = $PSScriptRoot
-        Write-Verbose "Path is $path"
+        Write-Verbose "Script Run Path: $path"
+
         #Check for diskpd utility and stop if it does not exist.
-        if(!(Test-Path "$path\diskspd.exe"))
+        if ( -not ( Test-Path "$path\diskspd.exe" ) )
         {
-            $dir = Get-ChildItem $PSScriptRoot | select -ExpandProperty FullName -First 10 | Out-String
+            $dir = Get-ChildItem $PSScriptRoot | Select-Object -ExpandProperty FullName -First 10 | Out-String
             throw "Diskpd.exe not found in directory: $PSScriptRoot`nPlease ensure that the script is run from the same directory as diskpd.exe!!!`n DIRECTORY CONTENTS:`n$dir"
         }
-        $global:boundparams = $PSBoundParameters
-        # use 1 thread per core
-        $thread = "-t" + ((Get-WmiObject win32_processor).NumberofCores | Measure-Object -Sum | Select-Object -ExpandProperty sum)
 
+        #Configure Option: use 1 thread per core
+        $thread = "-t" + ( ( Get-WmiObject win32_processor ).NumberofCores | Measure-Object -Sum | Select-Object -ExpandProperty sum )
+
+        # List all disks on the server
         $ServerDisks = Get-WmiObject -Class win32_logicaldisk -Filter "DriveType='3'"
-        Write-Verbose $($ServerDisks | select DeviceID,DriveType,VolumeName | Out-String)
+        Write-Verbose $( $ServerDisks | Select-Object DeviceID,DriveType,VolumeName | Out-String )
 
         # Helper Functions
+        # Test-Disk is the Fuction responsible for puting the Diskpd.exe run command all together and running it.
+        # It starts the commands as ps jobs and waits for them to complete.
         Function Test-Disk($path,$thread,$Size,$file,$type,$seconds){
-            $IO = @{Read=0;Write=100;Stardard=25}
+            #$IO = @{Read=0;Write=100;Stardard=25}
             $time = "-d{0}" -f $seconds
             $strIEX = switch ( $type )
             {
@@ -131,14 +150,14 @@
 
             Write-Verbose ( "Running {0} Test:`nCOMMAND: {1}" -f $type,$strIEX )
 
-            Start-Job -OutVariable DiskTest -ScriptBlock {Invoke-Expression $args[0]} -ArgumentList $strIEX -Verbose:$false| Out-Null
+            Start-Job -OutVariable DiskTest -ScriptBlock { Invoke-Expression $args[0] } -ArgumentList $strIEX -Verbose:$false | Out-Null
             $seconds = $seconds + 16
-            Write-Verbose "Waiting $seconds Seconds for Test"
+            Write-Verbose "Test will run $($seconds - 16) Seconds, but total wait for results processing will be $seconds"
             $doneDT = (Get-Date).AddSeconds( $seconds )
             while($doneDT -gt (Get-Date)) 
             {
                 $secondsLeft = $doneDT.Subtract((Get-Date)).TotalSeconds
-                $percent = ($seconds - $secondsLeft) / $seconds * 100
+                $percent = ( $seconds - $secondsLeft ) / $seconds * 100
                 Write-Progress -Activity "Running $type test" -Status "Waiting for Test..." -SecondsRemaining $secondsLeft -PercentComplete $percent
                 [System.Threading.Thread]::Sleep(500)
             }
@@ -148,17 +167,17 @@
         }#Function Test-Disk
 
         Function Format-Results($InputData,$Export,$type){
-            if($Export)
+            if ( $Export )
             {
                 $filename = ( "{0}\{1}_Drive_{2}_Test_{3}.txt" -f $path,$($disk.split(':')[0]),$type,$( (get-date).tostring( "ddmmyyyyhhmm" ) ) )
                 Write-Verbose ( "Exporting results to: {0}" -f $filename)
                 if(!(Test-Path $filename)){
                     New-Item -Path $filename -Force | Out-Null
                 }
-                Write-Host -ForegroundColor Yellow "$($type.toupper()) EXPORT: $filename"
-                $InputData | Add-Content -Path $filename -Force
-            }
-            
+                Write-Host -ForegroundColor Yellow "$($type.toupper()) Test EXPORT: $filename"
+                $InputData | Add-Content -Path $filename -Force 
+                start-process notepad.exe $filename
+            } else {
                 $InputData | ForEach-Object {
                     if( $_ -match "^(Total IO|Read IO|Write IO|thread.\||total:|  %)" ) {
                         Write-Host -ForegroundColor Magenta $_
@@ -168,19 +187,20 @@
                         Write-Host $_
                     }
                 }
+            }
         }#Function Format-Results
     }
 
     Process
     {
-        if($PSBoundParameters.ContainsKey('AllDrives')){
-            [string[]]$disks = $ServerDisks.DeviceID | foreach{-join ($_,"\")}
+        if ( $PSBoundParameters.ContainsKey( 'AllDrives' ) ) {
+            [string[]] $disks = $ServerDisks.DeviceID | ForEach-Object { -join ($_,"\") }
         }
-        if($PSBoundParameters.ContainsKey('Drive')){
+        if ( $PSBoundParameters.ContainsKey( 'Drive' ) ){
             [string[]]$disks = $PSBoundParameters.Drive
         }
         Write-Verbose "Testing drives $($disks | Out-String)"
-        foreach($Disk in $disks)
+        foreach( $Disk in $disks )
         {
             #Create IO Folder and File paths
             $iopath = New-Item -Path "$Disk\IOTest" -ItemType Directory -Force
@@ -239,7 +259,10 @@
 
     End
     {
-        if(Test-Path $iofile){
-            Remove-Item $(Split-Path $iofile) -Force -Recurse
+        if( Test-Path $iofile ){
+            Remove-Item $( Split-Path $iofile ) -Force -Recurse
         }
     }
+
+
+    
